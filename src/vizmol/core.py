@@ -84,6 +84,7 @@ _REPRESENTATION_PRESETS: dict[str, dict] = {
     "ball-and-stick": {"particle_scale": 0.4, "bond_radius": 0.15},
     "space-filling": {"particle_scale": 1.0, "bond_radius": 0.0},
     "wireframe": {"particle_scale": 0.15, "bond_radius": 0.08},
+    "uniform": {"particle_scale": 1.0, "bond_radius": 0.15},
 }
 
 # ---------------------------------------------------------------------------
@@ -237,7 +238,7 @@ class MoleculeVisualizer:
         bond_padding: float = 0.3,
         style: Literal["realistic", "cartoon"] = "realistic",
         representation: Literal[
-            "ball-and-stick", "space-filling", "wireframe"
+            "ball-and-stick", "space-filling", "wireframe", "uniform"
         ] = "ball-and-stick",
         supercell: tuple[int, int, int] | None = None,
         show_cell: bool | None = None,
@@ -345,6 +346,20 @@ class MoleculeVisualizer:
         # Cartoon-specific: flat shading on bonds
         if self.style == "cartoon":
             self._bond_modifier.vis.flat_shading = True
+
+        if self.representation == "uniform":
+            self._bond_modifier.vis.coloring_mode = type(self._bond_modifier.vis).ColoringMode.Uniform
+            self._bond_modifier.vis.color = (0.0, 0.0, 0.0)
+            
+            def _set_uniform_radii(frame: int, data) -> None:  # noqa: ANN001
+                if data.particles is None or data.particles.particle_types is None:
+                    return
+                ptypes = data.particles_.particle_types_
+                for pt in ptypes.types:
+                    mut_pt = ptypes.make_mutable(pt)
+                    mut_pt.radius = 0.5
+
+            self._pipeline.modifiers.append(_set_uniform_radii)
 
         # Custom colors
         colors_dict = self.colors

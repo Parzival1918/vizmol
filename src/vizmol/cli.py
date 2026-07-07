@@ -61,7 +61,7 @@ def _build_parser(config: dict) -> argparse.ArgumentParser:
         )
         sub.add_argument(
             "--representation",
-            choices=["ball-and-stick", "space-filling", "wireframe"],
+            choices=["ball-and-stick", "space-filling", "wireframe", "uniform"],
             default=config.get("representation", "ball-and-stick"),
             help="Atom/bond representation (default: ball-and-stick).",
         )
