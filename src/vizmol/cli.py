@@ -101,6 +101,12 @@ def _build_parser() -> argparse.ArgumentParser:
             help="The 3-D point the camera looks at. Defaults to centre of mass.",
         )
         sub.add_argument(
+            "--projection",
+            choices=["perspective", "orthographic"],
+            default="orthographic",
+            help="Camera projection type (default: orthographic).",
+        )
+        sub.add_argument(
             "--width",
             type=int,
             default=800,
@@ -197,6 +203,7 @@ def main(argv: list[str] | None = None) -> None:
         camera_elevation=args.camera_elevation,
         camera_distance=args.camera_distance,
         focal_point=_parse_vector(args.focal_point),
+        projection=args.projection,
     )
 
     print(

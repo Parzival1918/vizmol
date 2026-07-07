@@ -191,10 +191,13 @@ class MoleculeVisualizer:
         Default ``30``.
     camera_distance : float | None
         Distance from the focal point to the camera in Å.  ``None`` (default)
-        auto-computes a distance that fits the whole structure.
+        auto-computes a distance that fits the whole structure. For
+        orthographic projection, this sets the field-of-view width.
     focal_point : tuple[float, float, float] | None
         The 3-D point the camera looks at.  ``None`` (default) uses the
         centre of mass of the atoms.
+    projection : ``"perspective"`` | ``"orthographic"``
+        Camera projection type. Default is ``"orthographic"``.
     """
 
     def __init__(
@@ -211,6 +214,7 @@ class MoleculeVisualizer:
         camera_elevation: float = 30.0,
         camera_distance: float | None = None,
         focal_point: tuple[float, float, float] | None = None,
+        projection: Literal["perspective", "orthographic"] = "orthographic",
     ) -> None:
         self.file_path = Path(file_path)
         if not self.file_path.exists():
@@ -224,6 +228,7 @@ class MoleculeVisualizer:
         self.camera_elevation = camera_elevation
         self.camera_distance = camera_distance
         self.focal_point = focal_point
+        self.projection = projection
 
         # Load the pipeline
         self._pipeline = import_file(str(self.file_path))
@@ -325,6 +330,10 @@ class MoleculeVisualizer:
         self._pipeline.add_to_scene()
         data = self._pipeline.compute()
 
+        vp_type = Viewport.Type.Ortho if self.projection == "orthographic" else Viewport.Type.Perspective
+        vp = Viewport(type=vp_type)
+        vp.zoom_all()
+
         # Determine focal point (centre of mass if not specified)
         if self.focal_point is not None:
             fp = np.array(self.focal_point, dtype=float)
@@ -334,6 +343,8 @@ class MoleculeVisualizer:
         # Determine distance
         if self.camera_distance is not None:
             dist = self.camera_distance
+            if self.projection == "orthographic":
+                vp.fov = dist
         else:
             # Heuristic: 2.5× the bounding-sphere radius
             positions = np.array(data.particles.positions)
@@ -349,7 +360,6 @@ class MoleculeVisualizer:
         cam_pos = fp + np.array([dx, dy, dz])
         cam_dir = fp - cam_pos  # look towards focal point
 
-        vp = Viewport(type=Viewport.Type.Perspective)
         vp.camera_pos = tuple(cam_pos)
         vp.camera_dir = tuple(cam_dir)
         return vp
