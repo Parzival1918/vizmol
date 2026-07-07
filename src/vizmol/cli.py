@@ -55,6 +55,27 @@ def _build_parser() -> argparse.ArgumentParser:
                  "detection (default: 0.3).",
         )
         sub.add_argument(
+            "--supercell",
+            type=str,
+            default=None,
+            metavar="NxNxN",
+            help="Replicate the unit cell, e.g. '2x2x2' for a 2×2×2 "
+                 "supercell.",
+        )
+        cell_group = sub.add_mutually_exclusive_group()
+        cell_group.add_argument(
+            "--show-cell",
+            action="store_true",
+            default=None,
+            help="Show the simulation-cell wireframe.",
+        )
+        cell_group.add_argument(
+            "--hide-cell",
+            action="store_true",
+            default=None,
+            help="Hide the simulation-cell wireframe.",
+        )
+        sub.add_argument(
             "--width",
             type=int,
             default=800,
@@ -96,16 +117,38 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _parse_supercell(value: str | None) -> tuple[int, int, int] | None:
+    """Parse a '2x2x2'-style supercell string into a tuple."""
+    if value is None:
+        return None
+    parts = value.lower().split("x")
+    if len(parts) != 3:
+        raise argparse.ArgumentTypeError(
+            f"Invalid supercell format: {value!r}. Expected NxNxN, e.g. '2x2x2'."
+        )
+    return (int(parts[0]), int(parts[1]), int(parts[2]))
+
+
 def main(argv: list[str] | None = None) -> None:
     """Entry point for the ``vizmol`` CLI."""
     parser = _build_parser()
     args = parser.parse_args(argv)
+
+    # Resolve show_cell: None means auto-detect
+    if args.show_cell:
+        show_cell = True
+    elif args.hide_cell:
+        show_cell = False
+    else:
+        show_cell = None
 
     viz = MoleculeVisualizer(
         file_path=args.input,
         bond_padding=args.bond_padding,
         style=args.style,
         representation=args.representation,
+        supercell=_parse_supercell(args.supercell),
+        show_cell=show_cell,
     )
 
     print(

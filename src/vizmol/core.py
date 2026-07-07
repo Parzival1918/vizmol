@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import warnings
+from collections import deque
 from pathlib import Path
 from typing import Literal
 
@@ -18,7 +19,8 @@ import numpy as np
 warnings.filterwarnings("ignore", message=".*OVITO.*PyPI")
 
 from ovito.io import import_file  # noqa: E402
-from ovito.modifiers import CreateBondsModifier  # noqa: E402
+from ovito.modifiers import CreateBondsModifier, ReplicateModifier  # noqa: E402
+from ovito.data import BondsEnumerator  # noqa: E402
 from ovito.vis import TachyonRenderer, Viewport  # noqa: E402
 import ovito  # noqa: E402
 
@@ -85,6 +87,64 @@ _REPRESENTATION_PRESETS: dict[str, dict] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Molecule-wholeness modifier (BFS on bond graph using PBC shift vectors)
+# ---------------------------------------------------------------------------
+
+def _make_molecules_whole(frame: int, data) -> None:  # noqa: ANN001, ARG001
+    """Custom OVITO modifier that shifts atoms so that every molecule is
+    geometrically contiguous (not split across periodic boundaries).
+
+    The algorithm performs a BFS traversal of the bond graph.  For each bond
+    that crosses a periodic boundary, the ``Periodic Image`` shift vector tells
+    us by how many cell vectors the bonded neighbour is displaced.  We
+    accumulate these shifts and apply them to the Cartesian positions.
+    """
+    bonds = data.particles.bonds
+    if bonds is None or bonds.count == 0:
+        return
+
+    topology = bonds["Topology"]
+    pbc_shift = bonds["Periodic Image"]
+    cell_matrix = np.array(data.cell[:3, :3])  # 3×3 cell vectors
+
+    n = data.particles.count
+    visited = np.zeros(n, dtype=bool)
+    shifts = np.zeros((n, 3), dtype=float)
+
+    enum = BondsEnumerator(bonds)
+
+    for start in range(n):
+        if visited[start]:
+            continue
+        queue = deque([start])
+        visited[start] = True
+
+        while queue:
+            current = queue.popleft()
+            for bond_idx in enum.bonds_of_particle(current):
+                a, b = topology[bond_idx]
+                pbc = pbc_shift[bond_idx]
+                if a == current:
+                    neighbor, shift = b, pbc
+                else:
+                    neighbor, shift = a, -pbc
+                if not visited[neighbor]:
+                    visited[neighbor] = True
+                    shifts[neighbor] = shifts[current] + shift
+                    queue.append(neighbor)
+
+    # Apply accumulated lattice-vector shifts to Cartesian positions
+    particles = data.particles_
+    positions = particles.positions_
+    positions[:] += shifts @ cell_matrix
+
+    # Zero out the PBC shift vectors on bonds (molecules are now whole)
+    bonds_mut = data.particles_.bonds_
+    pbc_prop = bonds_mut["Periodic Image_"]
+    pbc_prop[:] = 0
+
+
 class MoleculeVisualizer:
     """High-level wrapper around the OVITO pipeline for molecular visualisation.
 
@@ -100,6 +160,12 @@ class MoleculeVisualizer:
         Rendering style preset.  Default is ``"realistic"``.
     representation : ``"ball-and-stick"`` | ``"space-filling"`` | ``"wireframe"``
         Atom / bond representation preset.  Default is ``"ball-and-stick"``.
+    supercell : tuple[int, int, int] | None
+        If given, replicate the unit cell along (a, b, c) to show periodic
+        images.  For example ``(2, 2, 2)`` produces a 2×2×2 supercell.
+    show_cell : bool
+        Whether to render the simulation-cell wireframe.  Default is ``True``
+        for periodic systems and ``False`` otherwise.
     """
 
     def __init__(
@@ -110,6 +176,8 @@ class MoleculeVisualizer:
         representation: Literal[
             "ball-and-stick", "space-filling", "wireframe"
         ] = "ball-and-stick",
+        supercell: tuple[int, int, int] | None = None,
+        show_cell: bool | None = None,
     ) -> None:
         self.file_path = Path(file_path)
         if not self.file_path.exists():
@@ -118,14 +186,37 @@ class MoleculeVisualizer:
         self.bond_padding = bond_padding
         self.style = style
         self.representation = representation
+        self.supercell = supercell
 
         # Load the pipeline
         self._pipeline = import_file(str(self.file_path))
 
+        # Detect whether the structure is periodic
+        data = self._pipeline.compute()
+        self._is_periodic = (
+            data.cell is not None and any(data.cell.pbc)
+        )
+
+        if show_cell is None:
+            self.show_cell = self._is_periodic
+        else:
+            self.show_cell = show_cell
+
         # Apply bond generation
         self._apply_bonds()
 
-        # Apply visual styling
+        # For periodic systems: make molecules whole before any replication
+        if self._is_periodic:
+            self._pipeline.modifiers.append(_make_molecules_whole)
+
+        # Supercell replication (after making molecules whole)
+        if self.supercell is not None:
+            nx, ny, nz = self.supercell
+            self._pipeline.modifiers.append(
+                ReplicateModifier(num_x=nx, num_y=ny, num_z=nz)
+            )
+
+        # Apply visual styling (including cell visibility)
         self._apply_style()
 
     # ------------------------------------------------------------------
@@ -173,6 +264,10 @@ class MoleculeVisualizer:
         # Cartoon-specific: flat shading on bonds
         if self.style == "cartoon":
             self._bond_modifier.vis.flat_shading = True
+
+        # Simulation cell wireframe visibility
+        if data.cell is not None and data.cell.vis is not None:
+            data.cell.vis.enabled = self.show_cell
 
     # ------------------------------------------------------------------
     # Renderer helpers
@@ -280,8 +375,8 @@ class MoleculeVisualizer:
                 "Only 'rotate' is currently supported."
             )
 
-
-        # Add a custom modifier that rotates all particles around the Y axis
+        # Add a custom modifier that rotates all particles *and* the
+        # simulation cell around the Y axis.
         def _rotate(frame: int, data) -> None:  # noqa: ANN001
             angle = 2 * math.pi * frame / num_frames
             cos_a, sin_a = math.cos(angle), math.sin(angle)
@@ -290,10 +385,26 @@ class MoleculeVisualizer:
                 [0, 1, 0],
                 [-sin_a, 0, cos_a],
             ])
+
+            # Rotate particle positions around their centre of mass
             particles = data.particles_
             positions = particles.positions_
             center = np.mean(positions, axis=0)
             positions[:] = (positions - center) @ rot.T + center
+
+            # Rotate the simulation cell (if present)
+            if data.cell is not None:
+                cell = data.cell_
+                matrix = np.array(cell.matrix)
+                # Rotate the three cell column-vectors (first 3 cols)
+                cell_vecs = matrix[:3, :3]
+                origin = matrix[:3, 3]
+                new_vecs = rot @ cell_vecs
+                new_origin = rot @ (origin - center) + center
+                new_matrix = np.zeros((3, 4))
+                new_matrix[:3, :3] = new_vecs
+                new_matrix[:3, 3] = new_origin
+                cell.matrix = new_matrix
 
         self._pipeline.modifiers.append(_rotate)
 
