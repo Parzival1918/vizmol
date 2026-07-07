@@ -102,7 +102,8 @@ _STYLE_PRESETS: dict[str, dict] = {
 _REPRESENTATION_PRESETS: dict[str, dict] = {
     "ball-and-stick": {"particle_scale": 0.4, "bond_radius": 0.15},
     "space-filling": {"particle_scale": 1.0, "bond_radius": 0.0},
-    "wireframe": {"particle_scale": 0.15, "bond_radius": 0.08},
+    "wireframe": {"particle_scale": 0, "bond_radius": 0.2},
+    "wireframe-thin": {"particle_scale": 0, "bond_radius": 0.1},
     "uniform": {"particle_scale": 1.0, "bond_radius": 0.15},
     "tube": {"particle_scale": 0.01, "bond_radius": 0.25},
     "wire": {"particle_scale": 0.01, "bond_radius": 0.10},
@@ -471,6 +472,20 @@ class MoleculeVisualizer:
         # Cartoon-specific: flat shading on bonds
         if self.style in ("cartoon", "flat"):
             self._bond_modifier.vis.flat_shading = True
+            
+        if self.representation == "wireframe":
+            # Force particles to have exactly the same radius as bonds
+            particles_vis.scaling = 1.0
+            
+            def _set_wireframe_radii(frame: int, data) -> None:  # noqa: ANN001
+                if data.particles is None or data.particles.particle_types is None:
+                    return
+                ptypes = data.particles_.particle_types_
+                for pt in ptypes.types:
+                    mut_pt = ptypes.make_mutable(pt)
+                    mut_pt.radius = bond_radius
+
+            self._pipeline.modifiers.append(_set_wireframe_radii)
 
         if self.representation == "uniform":
             self._bond_modifier.vis.coloring_mode = type(self._bond_modifier.vis).ColoringMode.Uniform

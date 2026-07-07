@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 try:
@@ -316,13 +317,15 @@ def main(argv: list[str] | None = None) -> None:
         f"({viz.num_bonds} bonds detected)"
     )
 
+    t0 = time.time()
     if args.command == "render":
         out = viz.render_image(
             args.output,
             width=args.width,
             height=args.height,
         )
-        print(f"Image saved to {out}")
+        elapsed = time.time() - t0
+        print(f"Image saved to {out} (rendered in {elapsed:.2f}s)")
 
     elif args.command == "animate":
         out = viz.render_animation(
@@ -333,7 +336,8 @@ def main(argv: list[str] | None = None) -> None:
             fps=args.fps,
             rotation_axis=_parse_vector(args.rotation_axis),
         )
-        print(f"Animation saved to {out}")
+        elapsed = time.time() - t0
+        print(f"Animation saved to {out} (rendered in {elapsed:.2f}s)")
 
 
 if __name__ == "__main__":
