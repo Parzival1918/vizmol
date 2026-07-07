@@ -230,6 +230,9 @@ class MoleculeVisualizer:
     show_info : bool
         Whether to show an overlay text with molecular/crystal information.
         Default is ``False``.
+    hide_hc_hydrogens : bool
+        Whether to remove hydrogen atoms that are bonded to carbon atoms.
+        Default is ``False``.
     """
 
     def __init__(
@@ -251,6 +254,7 @@ class MoleculeVisualizer:
         colors: dict[str, tuple[float, float, float]] | None = None,
         show_cell_axes: bool = False,
         show_info: bool = False,
+        hide_hc_hydrogens: bool = False,
     ) -> None:
         self.file_path = Path(file_path)
         if not self.file_path.exists():
@@ -269,6 +273,7 @@ class MoleculeVisualizer:
         self.colors = colors
         self.show_cell_axes = show_cell_axes
         self.show_info = show_info
+        self.hide_hc_hydrogens = hide_hc_hydrogens
 
         # Load the pipeline
         self._pipeline = import_file(str(self.file_path))
@@ -323,6 +328,44 @@ class MoleculeVisualizer:
 
         self._bond_modifier = modifier
         self._pipeline.modifiers.append(modifier)
+
+        # Optional: remove H bonded to C
+        if self.hide_hc_hydrogens:
+            def _remove_hc(frame: int, data) -> None:  # noqa: ANN001
+                from ovito.data import BondsEnumerator
+                bonds = data.particles.bonds
+                if bonds is None: return
+                ptypes = data.particles.particle_types
+                topology = bonds.topology
+                enum = BondsEnumerator(bonds)
+                h_type = None
+                c_type = None
+                for pt in ptypes.types:
+                    if pt.name.upper() == 'H': h_type = pt.id
+                    elif pt.name.upper() == 'C': c_type = pt.id
+                if h_type is None or c_type is None:
+                    return
+                to_delete = []
+                for i in range(data.particles.count):
+                    if ptypes[i] == h_type:
+                        bonded_to_c = False
+                        for bond_idx in enum.bonds_of_particle(i):
+                            a, b = topology[bond_idx]
+                            neighbor = b if a == i else a
+                            if ptypes[neighbor] == c_type:
+                                bonded_to_c = True
+                                break
+                        if bonded_to_c:
+                            to_delete.append(i)
+                if to_delete:
+                    import numpy as np
+                    sel = np.zeros(data.particles.count, dtype=int)
+                    sel[to_delete] = 1
+                    data.particles_.create_property('Selection', data=sel)
+            
+            from ovito.modifiers import DeleteSelectedModifier
+            self._pipeline.modifiers.append(_remove_hc)
+            self._pipeline.modifiers.append(DeleteSelectedModifier())
 
     # ------------------------------------------------------------------
     # Visual styling

@@ -124,6 +124,12 @@ def _build_parser(config: dict) -> argparse.ArgumentParser:
             help="Show an overlay with crystal/molecular information.",
         )
         sub.add_argument(
+            "--hide-hc-hydrogens",
+            action="store_true",
+            default=config.get("hide_hc_hydrogens", False),
+            help="Remove hydrogen atoms that are bonded to carbon atoms.",
+        )
+        sub.add_argument(
             "--focal-point",
             type=str,
             default=config.get("focal_point"),
@@ -269,6 +275,7 @@ def main(argv: list[str] | None = None) -> None:
         colors=config.get("colors"),
         show_cell_axes=args.show_cell_axes,
         show_info=args.show_info,
+        hide_hc_hydrogens=args.hide_hc_hydrogens,
     )
 
     print(
