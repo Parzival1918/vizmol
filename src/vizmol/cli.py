@@ -49,7 +49,7 @@ def _build_parser(config: dict) -> argparse.ArgumentParser:
         )
         sub.add_argument(
             "--style",
-            choices=["realistic", "cartoon"],
+            choices=["realistic", "cartoon", "flat"],
             default=config.get("style", "realistic"),
             help="Rendering style (default: realistic).",
         )
@@ -57,11 +57,14 @@ def _build_parser(config: dict) -> argparse.ArgumentParser:
             "--color-scheme",
             type=str,
             default=config.get("color_scheme", "default"),
-            help="Preset color scheme (default: default, alternative: muted).",
+            help="Preset color scheme (e.g. default, muted, xyzrender, pmol, paton).",
         )
         sub.add_argument(
             "--representation",
-            choices=["ball-and-stick", "space-filling", "wireframe", "uniform"],
+            choices=[
+                "ball-and-stick", "space-filling", "wireframe", "uniform",
+                "tube", "wire", "vdw", "pmol", "paton", "skeletal"
+            ],
             default=config.get("representation", "ball-and-stick"),
             help="Atom/bond representation (default: ball-and-stick).",
         )
