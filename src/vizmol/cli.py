@@ -60,6 +60,12 @@ def _build_parser(config: dict) -> argparse.ArgumentParser:
             help="Explicitly set the rendering engine. If unset, it is chosen automatically.",
         )
         sub.add_argument(
+            "--quality",
+            choices=["draft", "medium", "high"],
+            default=config.get("quality", "high"),
+            help="Rendering quality level (default: high).",
+        )
+        sub.add_argument(
             "--color-scheme",
             type=str,
             default=config.get("color_scheme", "default"),
@@ -293,6 +299,7 @@ def main(argv: list[str] | None = None) -> None:
         hide_hc_hydrogens=args.hide_hc_hydrogens,
         atom_borders=args.atom_borders,
         renderer=args.renderer,
+        quality=args.quality,
     )
 
     print(

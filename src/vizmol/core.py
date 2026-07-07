@@ -277,6 +277,9 @@ class MoleculeVisualizer:
     renderer : str | None
         Explicit rendering engine to use ('tachyon', 'ospray', 'opengl').
         Default is ``None`` (automatically chosen).
+    quality : str
+        Rendering quality level ('draft', 'medium', 'high').
+        Default is ``high``.
     """
 
     def __init__(
@@ -299,6 +302,7 @@ class MoleculeVisualizer:
         hide_hc_hydrogens: bool = False,
         atom_borders: bool = False,
         renderer: str | None = None,
+        quality: Literal["draft", "medium", "high"] = "high",
     ) -> None:
         self.file_path = Path(file_path)
         if not self.file_path.exists():
@@ -320,6 +324,7 @@ class MoleculeVisualizer:
         self.hide_hc_hydrogens = hide_hc_hydrogens
         self.atom_borders = atom_borders
         self.renderer = renderer
+        self.quality = quality
         self._vdw_modifier = None
 
         # Load the pipeline
@@ -528,13 +533,13 @@ class MoleculeVisualizer:
 
     def _make_renderer(self):
         """Return a renderer configured for the active style."""
+        r = None
         if self.representation == "vdw-overlay":
             from ovito.vis import OpenGLRenderer
-            renderer = OpenGLRenderer()
-            renderer.order_independent_transparency = True
-            return renderer
+            r = OpenGLRenderer()
+            r.order_independent_transparency = True
             
-        if self.style == "hand-drawn":
+        elif self.style == "hand-drawn":
             from ovito.vis import OSPRayRenderer
             r = OSPRayRenderer()
             r.ambient_brightness = 1.0
@@ -545,22 +550,52 @@ class MoleculeVisualizer:
             if self.atom_borders:
                 r.outlines_enabled = True
                 r.outlines_color = (0.0, 0.0, 0.0)
-            return r
 
         preset = _STYLE_PRESETS[self.style]
         
-        if self.renderer == "opengl":
-            from ovito.vis import OpenGLRenderer
-            return OpenGLRenderer()
-        elif self.renderer == "ospray":
-            from ovito.vis import OSPRayRenderer
-            r = OSPRayRenderer()
-            # Try to map some Tachyon preset settings to OSPRay reasonably
-            if "direct_light_intensity" in preset:
-                r.direct_light_intensity = preset["direct_light_intensity"]
-            return r
-        else:
-            return TachyonRenderer(**preset)
+        if r is None:
+            if self.renderer == "opengl":
+                from ovito.vis import OpenGLRenderer
+                r = OpenGLRenderer()
+            elif self.renderer == "ospray":
+                from ovito.vis import OSPRayRenderer
+                r = OSPRayRenderer()
+                # Try to map some Tachyon preset settings to OSPRay reasonably
+                if "direct_light_intensity" in preset:
+                    r.direct_light_intensity = preset["direct_light_intensity"]
+            else:
+                r = TachyonRenderer(**preset)
+
+        # Apply quality settings
+        if self.quality == "draft":
+            if hasattr(r, "samples_per_pixel"):
+                r.samples_per_pixel = 1
+                r.denoising_enabled = False
+            elif hasattr(r, "antialiasing_samples"):
+                r.antialiasing = False
+                r.antialiasing_samples = 0
+            elif hasattr(r, "antialiasing_level"):
+                r.antialiasing_level = 0
+        elif self.quality == "medium":
+            if hasattr(r, "samples_per_pixel"):
+                r.samples_per_pixel = 4
+                r.denoising_enabled = True
+            elif hasattr(r, "antialiasing_samples"):
+                r.antialiasing = True
+                r.antialiasing_samples = 4
+            elif hasattr(r, "antialiasing_level"):
+                r.antialiasing_level = 2
+        elif self.quality == "high":
+            if hasattr(r, "samples_per_pixel"):
+                r.samples_per_pixel = 16
+                r.denoising_enabled = True
+            elif hasattr(r, "antialiasing_samples"):
+                r.antialiasing = True
+                r.antialiasing_samples = 12
+            elif hasattr(r, "antialiasing_level"):
+                r.antialiasing_level = 3
+        
+        return r
 
     def _make_viewport(self) -> Viewport:
         """Return a :class:`Viewport` positioned according to camera settings.
