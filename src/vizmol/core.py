@@ -279,11 +279,17 @@ class MoleculeVisualizer:
     atom_borders : bool
         Whether to add black outlines to atoms. Default is ``False``.
     renderer : str | None
-        Explicit rendering engine to use ('tachyon', 'ospray', 'opengl').
-        Default is ``None`` (automatically chosen).
-    quality : str
-        Rendering quality level ('draft', 'medium', 'high').
-        Default is ``high``.
+        Explicitly set the rendering engine (``"tachyon"``, ``"ospray"``, ``"opengl"``).
+    quality : "draft" | "medium" | "high"
+        Quality preset that adjusts sampling and anti-aliasing parameters.
+    fade_supercell : bool
+        Whether to fade replicated supercell molecules to a plain transparent color.
+    supercell_color : tuple[float, float, float]
+        RGB color to use for the faded supercell molecules. Default is gray (0.5, 0.5, 0.5).
+    supercell_transparency : float
+        Transparency level for the faded supercell molecules (0 = opaque, 1 = invisible). Default is 0.8.
+    background_color : tuple[float, float, float] | None
+        Background color as RGB float values. If None, uses default (usually transparent or white).
     """
 
     def __init__(
@@ -308,6 +314,10 @@ class MoleculeVisualizer:
         atom_borders: bool = False,
         renderer: str | None = None,
         quality: Literal["draft", "medium", "high"] = "high",
+        fade_supercell: bool = False,
+        supercell_color: tuple[float, float, float] = (0.5, 0.5, 0.5),
+        supercell_transparency: float = 0.8,
+        background_color: tuple[float, float, float] | None = None,
     ) -> None:
         self.file_path = Path(file_path)
         if not self.file_path.exists():
@@ -331,6 +341,10 @@ class MoleculeVisualizer:
         self.atom_borders = atom_borders
         self.renderer = renderer
         self.quality = quality
+        self.fade_supercell = fade_supercell
+        self.supercell_color = supercell_color
+        self.supercell_transparency = supercell_transparency
+        self.background_color = background_color
         self._vdw_modifier = None
 
         # Load the pipeline
@@ -383,11 +397,59 @@ class MoleculeVisualizer:
         if self.supercell is not None and self.extract_molecule is None:
             nx, ny, nz = self.supercell
             self._pipeline.modifiers.append(
-                ReplicateModifier(num_x=nx, num_y=ny, num_z=nz)
+                ReplicateModifier(num_x=nx, num_y=ny, num_z=nz, adjust_box=False)
             )
 
         # Apply visual styling (including cell visibility)
         self._apply_style()
+
+        if self.supercell is not None and self.extract_molecule is None and self.fade_supercell:
+            nx, ny, nz = self.supercell
+            color = self.supercell_color
+            transp = self.supercell_transparency
+            
+            def _fade_replicated(frame: int, data) -> None:  # noqa: ANN001
+                n_total = data.particles.count
+                n_orig = n_total // (nx * ny * nz)
+                
+                # 1. Particles Color
+                if "Color" not in data.particles:
+                    import numpy as np
+                    colors = np.zeros((n_total, 3))
+                    ptypes = data.particles.particle_types
+                    types_array = data.particles.particle_types[...]
+                    for pt in ptypes.types:
+                        colors[types_array == pt.id] = pt.color
+                    data.particles_.create_property("Color", data=colors)
+                else:
+                    colors = data.particles_["Color"][...]
+                    
+                colors[n_orig:] = color
+                data.particles_["Color"][...] = colors
+                
+                # 2. Particles Transparency
+                if "Transparency" not in data.particles:
+                    import numpy as np
+                    data.particles_.create_property("Transparency", data=np.zeros(n_total))
+                transps = data.particles_["Transparency"][...]
+                transps[n_orig:] = transp
+                data.particles_["Transparency"][...] = transps
+
+                # 3. Bonds Transparency
+                if data.particles.bonds is not None and data.particles.bonds.count > 0:
+                    bonds = data.particles_.bonds_
+                    b_total = bonds.count
+                    b_orig = b_total // (nx * ny * nz)
+                    
+                    # Transparency
+                    if "Transparency" not in bonds:
+                        import numpy as np
+                        bonds.create_property("Transparency", data=np.zeros(b_total))
+                    b_transps = bonds["Transparency"][...]
+                    b_transps[b_orig:] = transp
+                    bonds["Transparency"][...] = b_transps
+
+            self._pipeline.modifiers.append(_fade_replicated)
 
     # ------------------------------------------------------------------
     # Bond generation
@@ -474,7 +536,9 @@ class MoleculeVisualizer:
             self._bond_modifier.vis.flat_shading = True
             
         if self.representation == "wireframe":
-            # Force particles to have exactly the same radius as bonds
+            # Force particles to have a slightly smaller radius than bonds (0.85x)
+            # This perfectly fills the joint gaps but prevents low-poly draft spheres 
+            # from 'popping out' of the cylinder faces!
             particles_vis.scaling = 1.0
             
             def _set_wireframe_radii(frame: int, data) -> None:  # noqa: ANN001
@@ -483,7 +547,7 @@ class MoleculeVisualizer:
                 ptypes = data.particles_.particle_types_
                 for pt in ptypes.types:
                     mut_pt = ptypes.make_mutable(pt)
-                    mut_pt.radius = bond_radius
+                    mut_pt.radius = bond_radius * 0.85
 
             self._pipeline.modifiers.append(_set_wireframe_radii)
 
@@ -795,11 +859,16 @@ class MoleculeVisualizer:
 
         vp = self._make_viewport()
         renderer = self._make_renderer()
-        vp.render_image(
-            filename=str(output),
-            size=(width, height),
-            renderer=renderer,
-        )
+        
+        kwargs = {
+            "filename": str(output),
+            "size": (width, height),
+            "renderer": renderer,
+        }
+        if self.background_color is not None:
+            kwargs["background"] = self.background_color
+            
+        vp.render_image(**kwargs)
         
         if self._vdw_modifier is not None:
             del self._pipeline.modifiers[-1]
@@ -912,11 +981,15 @@ class MoleculeVisualizer:
         ovito.scene.anim.last_frame = num_frames - 1
         ovito.scene.anim.frames_per_second = fps
 
-        vp.render_anim(
-            filename=str(output),
-            size=(width, height),
-            renderer=renderer,
-        )
+        kwargs = {
+            "filename": str(output),
+            "size": (width, height),
+            "renderer": renderer,
+        }
+        if self.background_color is not None:
+            kwargs["background"] = self.background_color
+            
+        vp.render_anim(**kwargs)
 
         # Clean up: remove the rotation modifier (last added) and take the
         # pipeline off scene.  Re-enable auto-adjust for future operations.

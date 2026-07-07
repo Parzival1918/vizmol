@@ -146,6 +146,18 @@ def _build_parser(config: dict) -> argparse.ArgumentParser:
             help="Remove hydrogen atoms that are bonded to carbon atoms.",
         )
         sub.add_argument(
+            "--fade-supercell",
+            action="store_true",
+            default=config.get("fade_supercell", False),
+            help="Fade replicated supercell molecules to a solid transparent color.",
+        )
+        sub.add_argument(
+            "--background-color",
+            type=str,
+            default=config.get("background_color"),
+            help="Background color as 'R,G,B' (e.g. '1,1,1' for white, '0,0,0' for black). Defaults to renderer standard.",
+        )
+        sub.add_argument(
             "--extract-molecule",
             type=int,
             nargs="?",
@@ -289,12 +301,23 @@ def main(argv: list[str] | None = None) -> None:
     else:
         show_cell = None
 
+    supercell_color_raw = config.get("supercell_color", "0.5, 0.5, 0.5")
+    supercell_color = _parse_vector(supercell_color_raw) if isinstance(supercell_color_raw, str) else supercell_color_raw
+    if supercell_color is None:
+        supercell_color = (0.5, 0.5, 0.5)
+
+    background_color = _parse_vector(args.background_color) if isinstance(args.background_color, str) else args.background_color
+
     viz = MoleculeVisualizer(
         file_path=args.input,
         bond_padding=args.bond_padding,
         style=args.style,
         representation=args.representation,
         supercell=_parse_supercell(args.supercell),
+        fade_supercell=args.fade_supercell,
+        supercell_color=supercell_color,
+        supercell_transparency=config.get("supercell_transparency", 0.8),
+        background_color=background_color,
         show_cell=show_cell,
         camera_azimuth=args.camera_azimuth,
         camera_elevation=args.camera_elevation,
