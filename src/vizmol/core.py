@@ -441,6 +441,18 @@ class MoleculeVisualizer:
 
             self._pipeline.modifiers.append(_set_uniform_radii)
 
+        if self.representation == "vdw":
+            def _set_vdw_radii(frame: int, data) -> None:  # noqa: ANN001
+                if data.particles is None or data.particles.particle_types is None:
+                    return
+                ptypes = data.particles_.particle_types_
+                for pt in ptypes.types:
+                    mut_pt = ptypes.make_mutable(pt)
+                    rad = _VDW_RADII.get(pt.name.upper(), _DEFAULT_VDW_RADIUS) if pt.name else _DEFAULT_VDW_RADIUS
+                    mut_pt.radius = rad
+
+            self._pipeline.modifiers.append(_set_vdw_radii)
+
         if self.representation == "vdw-overlay":
             def _vdw_overlay_mod(frame: int, data) -> None:  # noqa: ANN001
                 from ovito.data import Particles
