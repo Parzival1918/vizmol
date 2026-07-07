@@ -280,9 +280,6 @@ class MoleculeVisualizer:
                 "Only 'rotate' is currently supported."
             )
 
-        # Set the animation interval so OVITO knows how many frames to render
-        ovito.scene.anim.last_frame = num_frames - 1
-        ovito.scene.anim.frames_per_second = fps
 
         # Add a custom modifier that rotates all particles around the Y axis
         def _rotate(frame: int, data) -> None:  # noqa: ANN001
@@ -302,6 +299,15 @@ class MoleculeVisualizer:
 
         vp = self._make_viewport()
         renderer = self._make_renderer()
+
+        # Set the animation interval AFTER add_to_scene (called inside
+        # _make_viewport) and disable auto-adjust so OVITO does not reset
+        # the frame range to match the pipeline's single source frame.
+        ovito.scene.anim.auto_adjust_interval = False
+        ovito.scene.anim.first_frame = 0
+        ovito.scene.anim.last_frame = num_frames - 1
+        ovito.scene.anim.frames_per_second = fps
+
         vp.render_anim(
             filename=str(output),
             size=(width, height),
@@ -309,7 +315,8 @@ class MoleculeVisualizer:
         )
 
         # Clean up: remove the rotation modifier (last added) and take the
-        # pipeline off scene
+        # pipeline off scene.  Re-enable auto-adjust for future operations.
+        ovito.scene.anim.auto_adjust_interval = True
         del self._pipeline.modifiers[-1]
         self._pipeline.remove_from_scene()
         return output
