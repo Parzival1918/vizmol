@@ -86,6 +86,25 @@ _REPRESENTATION_PRESETS: dict[str, dict] = {
     "wireframe": {"particle_scale": 0.15, "bond_radius": 0.08},
 }
 
+# ---------------------------------------------------------------------------
+# Color schemes
+# ---------------------------------------------------------------------------
+_COLOR_SCHEMES: dict[str, dict[str, tuple[float, float, float]]] = {
+    "default": {},
+    "muted": {
+        "C": (0.6, 0.6, 0.6),
+        "H": (0.9, 0.9, 0.9),
+        "O": (0.8, 0.4, 0.4),
+        "N": (0.4, 0.6, 0.8),
+        "S": (0.8, 0.8, 0.4),
+        "P": (0.8, 0.6, 0.4),
+        "CL": (0.6, 0.8, 0.6),
+        "F": (0.6, 0.8, 0.8),
+        "BR": (0.7, 0.5, 0.4),
+        "I": (0.6, 0.4, 0.6),
+    },
+}
+
 
 # ---------------------------------------------------------------------------
 # Molecule-wholeness modifier (BFS on bond graph using PBC shift vectors)
@@ -198,6 +217,12 @@ class MoleculeVisualizer:
         centre of mass of the atoms.
     projection : ``"perspective"`` | ``"orthographic"``
         Camera projection type. Default is ``"orthographic"``.
+    color_scheme : str
+        Preset color scheme to use. Default is ``"default"``. Other built-in
+        options include ``"muted"``.
+    colors : dict[str, tuple[float, float, float]] | None
+        Custom mapping of element symbols (e.g. ``"C"``, ``"O"``) to RGB
+        tuples. Overrides ``color_scheme`` if provided.
     """
 
     def __init__(
@@ -215,6 +240,8 @@ class MoleculeVisualizer:
         camera_distance: float | None = None,
         focal_point: tuple[float, float, float] | None = None,
         projection: Literal["perspective", "orthographic"] = "orthographic",
+        color_scheme: str = "default",
+        colors: dict[str, tuple[float, float, float]] | None = None,
     ) -> None:
         self.file_path = Path(file_path)
         if not self.file_path.exists():
@@ -229,6 +256,8 @@ class MoleculeVisualizer:
         self.camera_distance = camera_distance
         self.focal_point = focal_point
         self.projection = projection
+        self.color_scheme = color_scheme
+        self.colors = colors
 
         # Load the pipeline
         self._pipeline = import_file(str(self.file_path))
@@ -306,6 +335,29 @@ class MoleculeVisualizer:
         # Cartoon-specific: flat shading on bonds
         if self.style == "cartoon":
             self._bond_modifier.vis.flat_shading = True
+
+        # Custom colors
+        colors_dict = self.colors
+        if colors_dict is None:
+            if self.color_scheme not in _COLOR_SCHEMES:
+                raise ValueError(f"Unknown color scheme: {self.color_scheme}")
+            colors_dict = _COLOR_SCHEMES[self.color_scheme]
+
+        if colors_dict:
+            # Normalise keys to upper case
+            norm_colors = {k.upper(): v for k, v in colors_dict.items()}
+            
+            def _set_colors(frame: int, data) -> None:  # noqa: ANN001
+                if data.particles is None or data.particles.particle_types is None:
+                    return
+                ptypes = data.particles_.particle_types_
+                for pt in ptypes.types:
+                    sym = pt.name.upper()
+                    if sym in norm_colors:
+                        mut_pt = ptypes.make_mutable(pt)
+                        mut_pt.color = norm_colors[sym]
+
+            self._pipeline.modifiers.append(_set_colors)
 
         # Simulation cell wireframe visibility
         if data.cell is not None and data.cell.vis is not None:

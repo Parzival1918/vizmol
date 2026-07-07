@@ -12,52 +12,70 @@ import argparse
 import sys
 from pathlib import Path
 
+try:
+    import tomllib
+except ImportError:
+    pass  # python < 3.11, though pyproject.toml requires >= 3.11
+
 from vizmol.core import MoleculeVisualizer
 
 
-def _build_parser() -> argparse.ArgumentParser:
+def _build_parser(config: dict) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="vizmol",
         description="Render images and animations of molecules and crystals.",
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    parser.add_argument(
+        "-c", "--config",
+        type=str,
+        help="Path to a TOML configuration file.",
+    )
+    subparsers = parser.add_subparsers(dest="command")
 
     # ---- shared arguments ------------------------------------------------
     def _add_common(sub: argparse.ArgumentParser) -> None:
         sub.add_argument(
             "input",
             type=str,
+            nargs="?",
+            default=config.get("input"),
             help="Path to an atomic-structure file (XYZ, CIF, PDB, POSCAR, …).",
         )
         sub.add_argument(
             "-o", "--output",
             type=str,
-            required=True,
+            default=config.get("output"),
             help="Output file path.",
         )
         sub.add_argument(
             "--style",
             choices=["realistic", "cartoon"],
-            default="realistic",
+            default=config.get("style", "realistic"),
             help="Rendering style (default: realistic).",
+        )
+        sub.add_argument(
+            "--color-scheme",
+            type=str,
+            default=config.get("color_scheme", "default"),
+            help="Preset color scheme (default: default, alternative: muted).",
         )
         sub.add_argument(
             "--representation",
             choices=["ball-and-stick", "space-filling", "wireframe"],
-            default="ball-and-stick",
+            default=config.get("representation", "ball-and-stick"),
             help="Atom/bond representation (default: ball-and-stick).",
         )
         sub.add_argument(
             "--bond-padding",
             type=float,
-            default=0.3,
+            default=config.get("bond_padding", 0.3),
             help="Padding (Å) added to the sum of covalent radii for bond "
                  "detection (default: 0.3).",
         )
         sub.add_argument(
             "--supercell",
             type=str,
-            default=None,
+            default=config.get("supercell"),
             metavar="NxNxN",
             help="Replicate the unit cell, e.g. '2x2x2' for a 2×2×2 "
                  "supercell.",
@@ -66,56 +84,56 @@ def _build_parser() -> argparse.ArgumentParser:
         cell_group.add_argument(
             "--show-cell",
             action="store_true",
-            default=None,
+            default=config.get("show_cell"),
             help="Show the simulation-cell wireframe.",
         )
         cell_group.add_argument(
             "--hide-cell",
             action="store_true",
-            default=None,
+            default=config.get("hide_cell"),
             help="Hide the simulation-cell wireframe.",
         )
         sub.add_argument(
             "--camera-azimuth",
             type=float,
-            default=45.0,
+            default=config.get("camera_azimuth", 45.0),
             help="Horizontal camera angle in degrees (default: 45.0).",
         )
         sub.add_argument(
             "--camera-elevation",
             type=float,
-            default=30.0,
+            default=config.get("camera_elevation", 30.0),
             help="Vertical camera angle in degrees (default: 30.0).",
         )
         sub.add_argument(
             "--camera-distance",
             type=float,
-            default=None,
+            default=config.get("camera_distance"),
             help="Camera distance in Å. If not given, auto-computes a distance.",
         )
         sub.add_argument(
             "--focal-point",
             type=str,
-            default=None,
+            default=config.get("focal_point"),
             metavar="X,Y,Z",
             help="The 3-D point the camera looks at. Defaults to centre of mass.",
         )
         sub.add_argument(
             "--projection",
             choices=["perspective", "orthographic"],
-            default="orthographic",
+            default=config.get("projection", "orthographic"),
             help="Camera projection type (default: orthographic).",
         )
         sub.add_argument(
             "--width",
             type=int,
-            default=800,
+            default=config.get("width", 800),
             help="Image width in pixels (default: 800).",
         )
         sub.add_argument(
             "--height",
             type=int,
-            default=600,
+            default=config.get("height", 600),
             help="Image height in pixels (default: 600).",
         )
 
@@ -135,19 +153,19 @@ def _build_parser() -> argparse.ArgumentParser:
     animate_parser.add_argument(
         "--frames",
         type=int,
-        default=60,
+        default=config.get("frames", 60),
         help="Number of frames in the animation (default: 60).",
     )
     animate_parser.add_argument(
         "--fps",
         type=int,
-        default=30,
+        default=config.get("fps", 30),
         help="Frames per second (default: 30).",
     )
     animate_parser.add_argument(
         "--rotation-axis",
         type=str,
-        default="0,1,0",
+        default=config.get("rotation_axis", "0,1,0"),
         metavar="X,Y,Z",
         help="Axis of rotation for the animation (default: 0,1,0).",
     )
@@ -181,8 +199,39 @@ def _parse_vector(value: str | None) -> tuple[float, float, float] | None:
 
 def main(argv: list[str] | None = None) -> None:
     """Entry point for the ``vizmol`` CLI."""
-    parser = _build_parser()
+    if argv is None:
+        argv = sys.argv[1:]
+
+    # Pre-parse toml config if provided
+    config = {}
+    for i, arg in enumerate(argv):
+        if arg in ("-c", "--config") and i + 1 < len(argv):
+            config_path = Path(argv[i + 1])
+            if config_path.exists():
+                with open(config_path, "rb") as f:
+                    raw_config = tomllib.load(f)
+                    # Normalize hyphens to underscores for argparse defaults
+                    config = {k.replace("-", "_"): v for k, v in raw_config.items()}
+            break
+
+    # If config specifies a command but CLI does not, inject it so argparse
+    # evaluates the subparser correctly.
+    cmd_from_config = config.get("command")
+    if cmd_from_config in ("render", "animate"):
+        if "render" not in argv and "animate" not in argv:
+            argv.append(cmd_from_config)
+
+    parser = _build_parser(config)
     args = parser.parse_args(argv)
+
+    if not getattr(args, "command", None):
+        parser.print_help()
+        sys.exit(1)
+
+    if not getattr(args, "input", None):
+        parser.error("The input file is required via CLI or config file.")
+    if not getattr(args, "output", None):
+        parser.error("The output file (-o/--output) is required via CLI or config file.")
 
     # Resolve show_cell: None means auto-detect
     if args.show_cell:
@@ -204,6 +253,8 @@ def main(argv: list[str] | None = None) -> None:
         camera_distance=args.camera_distance,
         focal_point=_parse_vector(args.focal_point),
         projection=args.projection,
+        color_scheme=args.color_scheme,
+        colors=config.get("colors"),
     )
 
     print(
