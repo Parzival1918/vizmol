@@ -56,6 +56,17 @@ COVALENT_RADII: dict[str, float] = {
 # Default fallback covalent radius for elements not in the table (Å)
 _DEFAULT_RADIUS: float = 1.50
 
+# Van der Waals radii (Å) - standard Alvarez (2013) values
+_VDW_RADII: dict[str, float] = {
+    "H": 1.20, "HE": 1.40, "LI": 1.82, "BE": 1.53, "B": 1.92,
+    "C": 1.70, "N": 1.55, "O": 1.52, "F": 1.47, "NE": 1.54,
+    "NA": 2.27, "MG": 1.73, "AL": 1.84, "SI": 2.10, "P": 1.80,
+    "S": 1.80, "CL": 1.75, "AR": 1.88, "K": 2.75, "CA": 2.31,
+    "CU": 1.40, "ZN": 1.39, "BR": 1.85, "AG": 1.72, "I": 1.98,
+    "PT": 1.72, "AU": 1.66
+}
+_DEFAULT_VDW_RADIUS: float = 2.0
+
 # ---------------------------------------------------------------------------
 # Rendering style presets
 # ---------------------------------------------------------------------------
@@ -98,6 +109,7 @@ _REPRESENTATION_PRESETS: dict[str, dict] = {
     "pmol": {"particle_scale": 0.4, "bond_radius": 0.15},
     "paton": {"particle_scale": 0.4, "bond_radius": 0.15},
     "skeletal": {"particle_scale": 0.25, "bond_radius": 0.14},
+    "vdw-overlay": {"particle_scale": 0.25, "bond_radius": 0.1},
 }
 
 # ---------------------------------------------------------------------------
@@ -298,6 +310,7 @@ class MoleculeVisualizer:
         self.show_cell_axes = show_cell_axes
         self.show_info = show_info
         self.hide_hc_hydrogens = hide_hc_hydrogens
+        self._vdw_modifier = None
 
         # Load the pipeline
         self._pipeline = import_file(str(self.file_path))
@@ -428,6 +441,38 @@ class MoleculeVisualizer:
 
             self._pipeline.modifiers.append(_set_uniform_radii)
 
+        if self.representation == "vdw-overlay":
+            def _vdw_overlay_mod(frame: int, data) -> None:  # noqa: ANN001
+                from ovito.data import Particles
+                import numpy as np
+
+                if data.particles is None or data.particles.count == 0:
+                    return
+
+                vdw = Particles()
+                vdw.identifier = "vdw"
+                vdw.create_property("Position", data=data.particles.positions)
+                vdw.create_property("Particle Type", data=data.particles.particle_types)
+                vdw.create_property("Transparency", data=np.full(data.particles.count, 0.95))
+                
+                ptypes = data.particles.particle_types
+                type_radii = {}
+                for pt in ptypes.types:
+                    type_radii[pt.id] = _VDW_RADII.get(pt.name.upper(), _DEFAULT_VDW_RADIUS) if pt.name else _DEFAULT_VDW_RADIUS
+                radii = np.array([type_radii[t] for t in ptypes], dtype=float)
+                vdw.create_property("Radius", data=radii)
+                
+                if "Color" in data.particles:
+                    vdw.create_property("Color", data=data.particles.color)
+                else:
+                    colors = np.array([ptypes.type_by_id(t).color for t in ptypes], dtype=float)
+                    vdw.create_property("Color", data=colors)
+                
+                vdw.vis.scaling = 1.0
+                data.objects.append(vdw)
+
+            self._vdw_modifier = _vdw_overlay_mod
+
         # Custom colors
         colors_dict = self.colors
         if colors_dict is None:
@@ -459,10 +504,17 @@ class MoleculeVisualizer:
     # Renderer helpers
     # ------------------------------------------------------------------
 
-    def _make_renderer(self) -> TachyonRenderer:
-        """Return a :class:`TachyonRenderer` configured for the active style."""
+    def _make_renderer(self):
+        """Return a renderer configured for the active style."""
+        if self.representation == "vdw-overlay":
+            from ovito.vis import OpenGLRenderer
+            renderer = OpenGLRenderer()
+            renderer.order_independent_transparency = True
+            return renderer
+            
         preset = _STYLE_PRESETS[self.style]
-        return TachyonRenderer(**preset)
+        renderer = TachyonRenderer(**preset)
+        return renderer
 
     def _make_viewport(self) -> Viewport:
         """Return a :class:`Viewport` positioned according to camera settings.
@@ -612,6 +664,9 @@ class MoleculeVisualizer:
         output = Path(output)
         output.parent.mkdir(parents=True, exist_ok=True)
 
+        if self._vdw_modifier is not None:
+            self._pipeline.modifiers.append(self._vdw_modifier)
+
         vp = self._make_viewport()
         renderer = self._make_renderer()
         vp.render_image(
@@ -619,6 +674,9 @@ class MoleculeVisualizer:
             size=(width, height),
             renderer=renderer,
         )
+        
+        if self._vdw_modifier is not None:
+            del self._pipeline.modifiers[-1]
         self._pipeline.remove_from_scene()
         return output
 
@@ -706,6 +764,8 @@ class MoleculeVisualizer:
                 self._tripod.axis3_dir = tuple(new_c / np.linalg.norm(new_c))
 
         self._pipeline.modifiers.append(_rotate)
+        if self._vdw_modifier is not None:
+            self._pipeline.modifiers.append(self._vdw_modifier)
 
         vp = self._make_viewport()
         renderer = self._make_renderer()
@@ -727,6 +787,8 @@ class MoleculeVisualizer:
         # Clean up: remove the rotation modifier (last added) and take the
         # pipeline off scene.  Re-enable auto-adjust for future operations.
         ovito.scene.anim.auto_adjust_interval = True
+        if self._vdw_modifier is not None:
+            del self._pipeline.modifiers[-1]
         del self._pipeline.modifiers[-1]
         self._pipeline.remove_from_scene()
         return output
