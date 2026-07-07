@@ -145,6 +145,24 @@ def _make_molecules_whole(frame: int, data) -> None:  # noqa: ANN001, ARG001
     pbc_prop[:] = 0
 
 
+# ---------------------------------------------------------------------------
+# Rotation matrix around an arbitrary axis (Rodrigues' formula)
+# ---------------------------------------------------------------------------
+
+def _rotation_matrix(axis: np.ndarray, angle: float) -> np.ndarray:
+    """Return the 3×3 rotation matrix for *angle* radians about *axis*.
+
+    Uses Rodrigues' rotation formula.  *axis* must be a unit vector.
+    """
+    k = axis / np.linalg.norm(axis)
+    K = np.array([
+        [0, -k[2], k[1]],
+        [k[2], 0, -k[0]],
+        [-k[1], k[0], 0],
+    ])
+    return np.eye(3) + math.sin(angle) * K + (1 - math.cos(angle)) * (K @ K)
+
+
 class MoleculeVisualizer:
     """High-level wrapper around the OVITO pipeline for molecular visualisation.
 
@@ -166,6 +184,17 @@ class MoleculeVisualizer:
     show_cell : bool
         Whether to render the simulation-cell wireframe.  Default is ``True``
         for periodic systems and ``False`` otherwise.
+    camera_azimuth : float
+        Horizontal camera angle in degrees (0 = +X, 90 = +Z).  Default ``45``.
+    camera_elevation : float
+        Vertical camera angle in degrees (0 = horizontal, 90 = top-down).
+        Default ``30``.
+    camera_distance : float | None
+        Distance from the focal point to the camera in Å.  ``None`` (default)
+        auto-computes a distance that fits the whole structure.
+    focal_point : tuple[float, float, float] | None
+        The 3-D point the camera looks at.  ``None`` (default) uses the
+        centre of mass of the atoms.
     """
 
     def __init__(
@@ -178,6 +207,10 @@ class MoleculeVisualizer:
         ] = "ball-and-stick",
         supercell: tuple[int, int, int] | None = None,
         show_cell: bool | None = None,
+        camera_azimuth: float = 45.0,
+        camera_elevation: float = 30.0,
+        camera_distance: float | None = None,
+        focal_point: tuple[float, float, float] | None = None,
     ) -> None:
         self.file_path = Path(file_path)
         if not self.file_path.exists():
@@ -187,6 +220,10 @@ class MoleculeVisualizer:
         self.style = style
         self.representation = representation
         self.supercell = supercell
+        self.camera_azimuth = camera_azimuth
+        self.camera_elevation = camera_elevation
+        self.camera_distance = camera_distance
+        self.focal_point = focal_point
 
         # Load the pipeline
         self._pipeline = import_file(str(self.file_path))
@@ -279,10 +316,42 @@ class MoleculeVisualizer:
         return TachyonRenderer(**preset)
 
     def _make_viewport(self) -> Viewport:
-        """Return a :class:`Viewport` zoomed to fit the current scene."""
+        """Return a :class:`Viewport` positioned according to camera settings.
+
+        If *camera_distance* is ``None``, falls back to ``zoom_all()`` and then
+        re-applies the user's azimuth / elevation while preserving the
+        auto-computed distance.
+        """
         self._pipeline.add_to_scene()
+        data = self._pipeline.compute()
+
+        # Determine focal point (centre of mass if not specified)
+        if self.focal_point is not None:
+            fp = np.array(self.focal_point, dtype=float)
+        else:
+            fp = np.mean(data.particles.positions, axis=0)
+
+        # Determine distance
+        if self.camera_distance is not None:
+            dist = self.camera_distance
+        else:
+            # Heuristic: 2.5× the bounding-sphere radius
+            positions = np.array(data.particles.positions)
+            radii = np.linalg.norm(positions - fp, axis=1)
+            dist = max(float(np.max(radii)) * 2.5, 5.0)
+
+        # Convert spherical → Cartesian offset from focal point
+        az = math.radians(self.camera_azimuth)
+        el = math.radians(self.camera_elevation)
+        dx = dist * math.cos(el) * math.cos(az)
+        dy = dist * math.sin(el)
+        dz = dist * math.cos(el) * math.sin(az)
+        cam_pos = fp + np.array([dx, dy, dz])
+        cam_dir = fp - cam_pos  # look towards focal point
+
         vp = Viewport(type=Viewport.Type.Perspective)
-        vp.zoom_all()
+        vp.camera_pos = tuple(cam_pos)
+        vp.camera_dir = tuple(cam_dir)
         return vp
 
     # ------------------------------------------------------------------
@@ -345,6 +414,7 @@ class MoleculeVisualizer:
         num_frames: int = 60,
         fps: int = 30,
         animation_type: Literal["rotate"] = "rotate",
+        rotation_axis: tuple[float, float, float] = (0.0, 1.0, 0.0),
     ) -> Path:
         """Render an animation (e.g. a 360° rotation) of the structure.
 
@@ -359,7 +429,11 @@ class MoleculeVisualizer:
         fps : int
             Frames per second.
         animation_type : str
-            Currently only ``"rotate"`` is supported (360° Y-axis rotation).
+            Currently only ``"rotate"`` is supported (360° rotation).
+        rotation_axis : tuple[float, float, float]
+            The axis of rotation as an (x, y, z) vector.  Default is
+            ``(0, 1, 0)`` (Y-axis).  The vector does not need to be
+            normalised.
 
         Returns
         -------
@@ -375,16 +449,16 @@ class MoleculeVisualizer:
                 "Only 'rotate' is currently supported."
             )
 
+        axis = np.array(rotation_axis, dtype=float)
+        if np.linalg.norm(axis) == 0:
+            raise ValueError("rotation_axis must be a non-zero vector.")
+        axis = axis / np.linalg.norm(axis)
+
         # Add a custom modifier that rotates all particles *and* the
-        # simulation cell around the Y axis.
+        # simulation cell around the given axis.
         def _rotate(frame: int, data) -> None:  # noqa: ANN001
             angle = 2 * math.pi * frame / num_frames
-            cos_a, sin_a = math.cos(angle), math.sin(angle)
-            rot = np.array([
-                [cos_a, 0, sin_a],
-                [0, 1, 0],
-                [-sin_a, 0, cos_a],
-            ])
+            rot = _rotation_matrix(axis, angle)
 
             # Rotate particle positions around their centre of mass
             particles = data.particles_
@@ -396,7 +470,6 @@ class MoleculeVisualizer:
             if data.cell is not None:
                 cell = data.cell_
                 matrix = np.array(cell.matrix)
-                # Rotate the three cell column-vectors (first 3 cols)
                 cell_vecs = matrix[:3, :3]
                 origin = matrix[:3, 3]
                 new_vecs = rot @ cell_vecs

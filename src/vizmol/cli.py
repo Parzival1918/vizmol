@@ -76,6 +76,31 @@ def _build_parser() -> argparse.ArgumentParser:
             help="Hide the simulation-cell wireframe.",
         )
         sub.add_argument(
+            "--camera-azimuth",
+            type=float,
+            default=45.0,
+            help="Horizontal camera angle in degrees (default: 45.0).",
+        )
+        sub.add_argument(
+            "--camera-elevation",
+            type=float,
+            default=30.0,
+            help="Vertical camera angle in degrees (default: 30.0).",
+        )
+        sub.add_argument(
+            "--camera-distance",
+            type=float,
+            default=None,
+            help="Camera distance in Å. If not given, auto-computes a distance.",
+        )
+        sub.add_argument(
+            "--focal-point",
+            type=str,
+            default=None,
+            metavar="X,Y,Z",
+            help="The 3-D point the camera looks at. Defaults to centre of mass.",
+        )
+        sub.add_argument(
             "--width",
             type=int,
             default=800,
@@ -113,6 +138,13 @@ def _build_parser() -> argparse.ArgumentParser:
         default=30,
         help="Frames per second (default: 30).",
     )
+    animate_parser.add_argument(
+        "--rotation-axis",
+        type=str,
+        default="0,1,0",
+        metavar="X,Y,Z",
+        help="Axis of rotation for the animation (default: 0,1,0).",
+    )
 
     return parser
 
@@ -127,6 +159,18 @@ def _parse_supercell(value: str | None) -> tuple[int, int, int] | None:
             f"Invalid supercell format: {value!r}. Expected NxNxN, e.g. '2x2x2'."
         )
     return (int(parts[0]), int(parts[1]), int(parts[2]))
+
+
+def _parse_vector(value: str | None) -> tuple[float, float, float] | None:
+    """Parse a 'X,Y,Z'-style string into a tuple of floats."""
+    if value is None:
+        return None
+    parts = value.split(",")
+    if len(parts) != 3:
+        raise argparse.ArgumentTypeError(
+            f"Invalid vector format: {value!r}. Expected X,Y,Z, e.g. '0,1,0'."
+        )
+    return (float(parts[0]), float(parts[1]), float(parts[2]))
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -149,6 +193,10 @@ def main(argv: list[str] | None = None) -> None:
         representation=args.representation,
         supercell=_parse_supercell(args.supercell),
         show_cell=show_cell,
+        camera_azimuth=args.camera_azimuth,
+        camera_elevation=args.camera_elevation,
+        camera_distance=args.camera_distance,
+        focal_point=_parse_vector(args.focal_point),
     )
 
     print(
@@ -171,6 +219,7 @@ def main(argv: list[str] | None = None) -> None:
             height=args.height,
             num_frames=args.frames,
             fps=args.fps,
+            rotation_axis=_parse_vector(args.rotation_axis),
         )
         print(f"Animation saved to {out}")
 
