@@ -49,9 +49,15 @@ def _build_parser(config: dict) -> argparse.ArgumentParser:
         )
         sub.add_argument(
             "--style",
-            choices=["realistic", "cartoon", "flat"],
+            choices=["realistic", "cartoon", "flat", "hand-drawn"],
             default=config.get("style", "realistic"),
             help="Rendering style (default: realistic).",
+        )
+        sub.add_argument(
+            "--renderer",
+            choices=["tachyon", "ospray", "opengl"],
+            default=config.get("renderer", None),
+            help="Explicitly set the rendering engine. If unset, it is chosen automatically.",
         )
         sub.add_argument(
             "--color-scheme",
@@ -131,6 +137,12 @@ def _build_parser(config: dict) -> argparse.ArgumentParser:
             action="store_true",
             default=config.get("hide_hc_hydrogens", False),
             help="Remove hydrogen atoms that are bonded to carbon atoms.",
+        )
+        sub.add_argument(
+            "--atom-borders",
+            action="store_true",
+            default=config.get("atom_borders", False),
+            help="Show black borders around atoms (only applies to 'hand-drawn' style).",
         )
         sub.add_argument(
             "--focal-point",
@@ -279,6 +291,8 @@ def main(argv: list[str] | None = None) -> None:
         show_cell_axes=args.show_cell_axes,
         show_info=args.show_info,
         hide_hc_hydrogens=args.hide_hc_hydrogens,
+        atom_borders=args.atom_borders,
+        renderer=args.renderer,
     )
 
     print(

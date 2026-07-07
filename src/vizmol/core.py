@@ -91,8 +91,9 @@ _STYLE_PRESETS: dict[str, dict] = {
         "shadows": False,
         "direct_light_intensity": 1.0,
         "antialiasing": True,
-        "antialiasing_samples": 12,
+        "antialiasing_samples": 4,
     },
+    "hand-drawn": {},
 }
 
 # ---------------------------------------------------------------------------
@@ -232,7 +233,7 @@ class MoleculeVisualizer:
     bond_padding : float
         Extra distance (Å) added to the sum of covalent radii when deciding
         whether two atoms are bonded.  Default is ``0.3``.
-    style : ``"realistic"`` | ``"cartoon"``
+    style : ``"realistic"`` | ``"cartoon"`` | ``"hand-drawn"``
         Rendering style preset.  Default is ``"realistic"``.
     representation : ``"ball-and-stick"`` | ``"space-filling"`` | ``"wireframe"``
         Atom / bond representation preset.  Default is ``"ball-and-stick"``.
@@ -271,13 +272,18 @@ class MoleculeVisualizer:
     hide_hc_hydrogens : bool
         Whether to remove hydrogen atoms that are bonded to carbon atoms.
         Default is ``False``.
+    atom_borders : bool
+        Whether to add black outlines to atoms. Default is ``False``.
+    renderer : str | None
+        Explicit rendering engine to use ('tachyon', 'ospray', 'opengl').
+        Default is ``None`` (automatically chosen).
     """
 
     def __init__(
         self,
         file_path: str | Path,
         bond_padding: float = 0.3,
-        style: Literal["realistic", "cartoon", "flat"] = "realistic",
+        style: Literal["realistic", "cartoon", "flat", "hand-drawn"] = "realistic",
         representation: str = "ball-and-stick",
         supercell: tuple[int, int, int] | None = None,
         show_cell: bool | None = None,
@@ -291,6 +297,8 @@ class MoleculeVisualizer:
         show_cell_axes: bool = False,
         show_info: bool = False,
         hide_hc_hydrogens: bool = False,
+        atom_borders: bool = False,
+        renderer: str | None = None,
     ) -> None:
         self.file_path = Path(file_path)
         if not self.file_path.exists():
@@ -310,6 +318,8 @@ class MoleculeVisualizer:
         self.show_cell_axes = show_cell_axes
         self.show_info = show_info
         self.hide_hc_hydrogens = hide_hc_hydrogens
+        self.atom_borders = atom_borders
+        self.renderer = renderer
         self._vdw_modifier = None
 
         # Load the pipeline
@@ -524,9 +534,33 @@ class MoleculeVisualizer:
             renderer.order_independent_transparency = True
             return renderer
             
+        if self.style == "hand-drawn":
+            from ovito.vis import OSPRayRenderer
+            r = OSPRayRenderer()
+            r.ambient_brightness = 1.0
+            r.direct_light_enabled = False
+            r.sky_light_enabled = False
+            r.material_shininess = 0
+            r.material_specular_brightness = 0.0
+            if self.atom_borders:
+                r.outlines_enabled = True
+                r.outlines_color = (0.0, 0.0, 0.0)
+            return r
+
         preset = _STYLE_PRESETS[self.style]
-        renderer = TachyonRenderer(**preset)
-        return renderer
+        
+        if self.renderer == "opengl":
+            from ovito.vis import OpenGLRenderer
+            return OpenGLRenderer()
+        elif self.renderer == "ospray":
+            from ovito.vis import OSPRayRenderer
+            r = OSPRayRenderer()
+            # Try to map some Tachyon preset settings to OSPRay reasonably
+            if "direct_light_intensity" in preset:
+                r.direct_light_intensity = preset["direct_light_intensity"]
+            return r
+        else:
+            return TachyonRenderer(**preset)
 
     def _make_viewport(self) -> Viewport:
         """Return a :class:`Viewport` positioned according to camera settings.
@@ -744,6 +778,14 @@ class MoleculeVisualizer:
         # Add a custom modifier that rotates all particles *and* the
         # simulation cell around the given axis.
         def _rotate(frame: int, data) -> None:  # noqa: ANN001
+            import sys
+            
+            # Print rendering progress
+            sys.stdout.write(f"\rRendering frame {frame + 1}/{num_frames}...")
+            sys.stdout.flush()
+            if frame == num_frames - 1:
+                sys.stdout.write("\n")
+
             angle = 2 * math.pi * frame / num_frames
             rot = _rotation_matrix(axis, angle)
 
