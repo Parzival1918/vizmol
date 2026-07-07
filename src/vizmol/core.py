@@ -223,6 +223,12 @@ class MoleculeVisualizer:
     colors : dict[str, tuple[float, float, float]] | None
         Custom mapping of element symbols (e.g. ``"C"``, ``"O"``) to RGB
         tuples. Overrides ``color_scheme`` if provided.
+    show_cell_axes : bool
+        Whether to show a coordinate tripod representing the unit cell vectors
+        (a, b, c). Default is ``False``.
+    show_info : bool
+        Whether to show an overlay text with molecular/crystal information.
+        Default is ``False``.
     """
 
     def __init__(
@@ -242,6 +248,8 @@ class MoleculeVisualizer:
         projection: Literal["perspective", "orthographic"] = "orthographic",
         color_scheme: str = "default",
         colors: dict[str, tuple[float, float, float]] | None = None,
+        show_cell_axes: bool = False,
+        show_info: bool = False,
     ) -> None:
         self.file_path = Path(file_path)
         if not self.file_path.exists():
@@ -258,6 +266,8 @@ class MoleculeVisualizer:
         self.projection = projection
         self.color_scheme = color_scheme
         self.colors = colors
+        self.show_cell_axes = show_cell_axes
+        self.show_info = show_info
 
         # Load the pipeline
         self._pipeline = import_file(str(self.file_path))
@@ -414,7 +424,70 @@ class MoleculeVisualizer:
 
         vp.camera_pos = tuple(cam_pos)
         vp.camera_dir = tuple(cam_dir)
+
+        # Add requested overlays
+        if self.show_cell_axes or self.show_info:
+            self._add_overlays(vp, data)
+
         return vp
+
+    def _add_overlays(self, vp: Viewport, data) -> None:
+        from ovito.vis import CoordinateTripodOverlay, TextLabelOverlay
+
+        if self.show_cell_axes and data.cell is not None:
+            a, b, c = data.cell[:, 0], data.cell[:, 1], data.cell[:, 2]
+            # Normalize axes so they are drawn with equal lengths
+            a_dir = a / np.linalg.norm(a)
+            b_dir = b / np.linalg.norm(b)
+            c_dir = c / np.linalg.norm(c)
+            
+            self._tripod = CoordinateTripodOverlay(
+                axis1_dir=tuple(a_dir), axis1_label='a',
+                axis2_dir=tuple(b_dir), axis2_label='b',
+                axis3_dir=tuple(c_dir), axis3_label='c',
+                size=0.1,
+                offset_x=0.02,
+                offset_y=0.02,
+            )
+            vp.overlays.append(self._tripod)
+
+        if self.show_info:
+            ptypes = data.particles.particle_types
+            counts = np.bincount(ptypes)
+            formula_parts = []
+            for pt in ptypes.types:
+                count = counts[pt.id]
+                if count > 0:
+                    formula_parts.append(f"{pt.name}{count if count > 1 else ''}")
+            formula = " ".join(formula_parts)
+
+            bonds_count = data.particles.bonds.count if data.particles.bonds is not None else 0
+            lines = [
+                f"Formula: {formula}",
+                f"Atoms: {data.particles.count}  |  Bonds: {bonds_count}"
+            ]
+
+            if data.cell is not None and any(data.cell.pbc):
+                a, b, c = data.cell[:, 0], data.cell[:, 1], data.cell[:, 2]
+                la = np.linalg.norm(a)
+                lb = np.linalg.norm(b)
+                lc = np.linalg.norm(c)
+                # Angle calculation with clipping to avoid numerical issues
+                alpha = np.degrees(np.arccos(np.clip(np.dot(b, c) / (lb * lc), -1.0, 1.0)))
+                beta = np.degrees(np.arccos(np.clip(np.dot(a, c) / (la * lc), -1.0, 1.0)))
+                gamma = np.degrees(np.arccos(np.clip(np.dot(a, b) / (la * lb), -1.0, 1.0)))
+
+                lines.append(f"Cell: a={la:.2f} Å, b={lb:.2f} Å, c={lc:.2f} Å")
+                lines.append(f"Angles: α={alpha:.1f}°, β={beta:.1f}°, γ={gamma:.1f}°")
+
+            text = "\n".join(lines)
+            vp.overlays.append(TextLabelOverlay(
+                text=text,
+                font_size=0.03,
+                text_color=(1, 1, 1),
+                outline_color=(0, 0, 0),
+                outline_enabled=True,
+            ))
 
     # ------------------------------------------------------------------
     # Public rendering API
@@ -540,6 +613,15 @@ class MoleculeVisualizer:
                 new_matrix[:3, :3] = new_vecs
                 new_matrix[:3, 3] = new_origin
                 cell.matrix = new_matrix
+
+            # Update tripod if it exists (so it rotates with the cell)
+            if getattr(self, '_tripod', None) is not None and data.cell is not None:
+                new_a = new_vecs[:, 0]
+                new_b = new_vecs[:, 1]
+                new_c = new_vecs[:, 2]
+                self._tripod.axis1_dir = tuple(new_a / np.linalg.norm(new_a))
+                self._tripod.axis2_dir = tuple(new_b / np.linalg.norm(new_b))
+                self._tripod.axis3_dir = tuple(new_c / np.linalg.norm(new_c))
 
         self._pipeline.modifiers.append(_rotate)
 

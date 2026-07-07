@@ -112,6 +112,18 @@ def _build_parser(config: dict) -> argparse.ArgumentParser:
             help="Camera distance in Å. If not given, auto-computes a distance.",
         )
         sub.add_argument(
+            "--show-cell-axes",
+            action="store_true",
+            default=config.get("show_cell_axes", False),
+            help="Show the unit cell vectors (a, b, c) as a coordinate tripod.",
+        )
+        sub.add_argument(
+            "--show-info",
+            action="store_true",
+            default=config.get("show_info", False),
+            help="Show an overlay with crystal/molecular information.",
+        )
+        sub.add_argument(
             "--focal-point",
             type=str,
             default=config.get("focal_point"),
@@ -255,6 +267,8 @@ def main(argv: list[str] | None = None) -> None:
         projection=args.projection,
         color_scheme=args.color_scheme,
         colors=config.get("colors"),
+        show_cell_axes=args.show_cell_axes,
+        show_info=args.show_info,
     )
 
     print(
