@@ -272,6 +272,9 @@ class MoleculeVisualizer:
     hide_hc_hydrogens : bool
         Whether to remove hydrogen atoms that are bonded to carbon atoms.
         Default is ``False``.
+    extract_molecule : int | None
+        Extract and render only a single molecule from the scene (by cluster ID).
+        Default is ``None``.
     atom_borders : bool
         Whether to add black outlines to atoms. Default is ``False``.
     renderer : str | None
@@ -300,6 +303,7 @@ class MoleculeVisualizer:
         show_cell_axes: bool = False,
         show_info: bool = False,
         hide_hc_hydrogens: bool = False,
+        extract_molecule: int | None = None,
         atom_borders: bool = False,
         renderer: str | None = None,
         quality: Literal["draft", "medium", "high"] = "high",
@@ -322,6 +326,7 @@ class MoleculeVisualizer:
         self.show_cell_axes = show_cell_axes
         self.show_info = show_info
         self.hide_hc_hydrogens = hide_hc_hydrogens
+        self.extract_molecule = extract_molecule
         self.atom_borders = atom_borders
         self.renderer = renderer
         self.quality = quality
@@ -348,8 +353,33 @@ class MoleculeVisualizer:
         if self._is_periodic:
             self._pipeline.modifiers.append(_make_molecules_whole)
 
+        if self.extract_molecule is not None:
+            from ovito.modifiers import ClusterAnalysisModifier, ExpressionSelectionModifier, DeleteSelectedModifier
+            
+            # Identify molecules (bonded clusters)
+            self._pipeline.modifiers.append(ClusterAnalysisModifier(
+                neighbor_mode=ClusterAnalysisModifier.NeighborMode.Bonding,
+                sort_by_size=True,
+            ))
+            
+            # Select everything except the requested molecule and delete it
+            self._pipeline.modifiers.append(ExpressionSelectionModifier(
+                expression=f"Cluster != {self.extract_molecule}"
+            ))
+            self._pipeline.modifiers.append(DeleteSelectedModifier())
+            
+            # Remove the simulation cell so it doesn't skew the camera zoom or render
+            def _remove_cell(frame: int, data) -> None:  # noqa: ANN001
+                if data.cell is not None:
+                    data.objects.remove(data.cell)
+            self._pipeline.modifiers.append(_remove_cell)
+            
+            # Override settings to hide cell since we deleted it
+            self.show_cell = False
+            self._is_periodic = False
+
         # Supercell replication (after making molecules whole)
-        if self.supercell is not None:
+        if self.supercell is not None and self.extract_molecule is None:
             nx, ny, nz = self.supercell
             self._pipeline.modifiers.append(
                 ReplicateModifier(num_x=nx, num_y=ny, num_z=nz)

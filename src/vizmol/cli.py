@@ -145,6 +145,14 @@ def _build_parser(config: dict) -> argparse.ArgumentParser:
             help="Remove hydrogen atoms that are bonded to carbon atoms.",
         )
         sub.add_argument(
+            "--extract-molecule",
+            type=int,
+            nargs="?",
+            const=1,
+            default=config.get("extract_molecule", None),
+            help="Extract and render a single molecule by ID (default ID: 1).",
+        )
+        sub.add_argument(
             "--atom-borders",
             action="store_true",
             default=config.get("atom_borders", False),
@@ -297,6 +305,7 @@ def main(argv: list[str] | None = None) -> None:
         show_cell_axes=args.show_cell_axes,
         show_info=args.show_info,
         hide_hc_hydrogens=args.hide_hc_hydrogens,
+        extract_molecule=args.extract_molecule,
         atom_borders=args.atom_borders,
         renderer=args.renderer,
         quality=args.quality,
